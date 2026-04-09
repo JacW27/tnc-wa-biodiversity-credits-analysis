@@ -1,0 +1,146 @@
+---
+title: "Merge and Filter Detections by Calibration Threshold"
+author: "Jacqueline Wu"
+date: "2026-3-10"
+format: html
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+required_packages <- c(
+  "readxl", "dplyr", "stringr", "readr",
+  "writexl", "janitor", "tibble", "vroom"
+)
+
+installed <- rownames(installed.packages())
+for (p in required_packages) {
+  if (!p %in% installed) install.packages(p)
+}
+
+library(readxl)
+library(dplyr)
+library(stringr)
+library(readr)
+library(writexl)
+library(janitor)
+library(tibble)
+library(vroom)
+```
+#### read file
+```{r}
+path_hoh <- "E:/merge_all/Outputs/Hoh/Hoh_ALL_plots.csv"
+path_cw <- "E:/merge_all/Outputs/Clearwater/Clearwater_ALL_plots.csv"
+path_ew <- "E:/merge_all/Outputs/Ellsworth/Ellsworth_ALL_plots.csv"
+
+calibration_file <- "C:/Users/jacqu/Downloads/OESF Calibration Results_GioFeb2026.xlsx"
+output_dir <- "E:/merge_all/Outputs"
+
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+```
+#### standardize key columns in detection data
+```{r}
+clean_detection_file <- function(path, site_name) {
+  vroom::vroom(path, show_col_types = FALSE, progress = FALSE) %>%
+    rename(common_name = `Common name`) %>%
+    filter(
+      `Scientific name` != "Abiotic",
+      common_name != "Biotic Insect",
+      common_name != "Biotic Anuran",
+      !is.na(Confidence),
+      Confidence >= 0.5
+    ) %>%
+    transmute(
+      site = site_name,
+      plot = plot_number,
+      aru = aru_number,
+      date = record_date,
+      hour = record_hour,
+      detection_common_name = common_name,
+      start_s = `Start (s)`,
+      end_s = `End (s)`,
+      detection_confidence = as.numeric(Confidence),
+      source = source_file
+    )
+}
+```
+#### combine all detection files
+```{r}
+hoh <- clean_detection_file(path_hoh, "Hoh")
+clearwater <- clean_detection_file(path_cw, "Clearwater")
+ellsworth <- clean_detection_file(path_ew, "Ellsworth")
+
+all_detections <- bind_rows(ellsworth, clearwater, hoh) %>%
+  clean_names() %>%
+  mutate(
+    detection_common_name = str_squish(str_to_lower(as.character(detection_common_name))),
+    detection_confidence = as.numeric(detection_confidence)
+  )
+```
+#### clean calibration results
+```{r}
+calibration_raw <- read_excel(calibration_file) %>%
+  clean_names()
+
+calibration <- calibration_raw %>%
+  rename(
+    calibration_common_name = common_name,
+    calibration_threshold = threshold
+  ) %>%
+  mutate(
+    calibration_common_name = str_squish(str_to_lower(as.character(calibration_common_name))),
+    calibration_threshold_raw = str_trim(as.character(calibration_threshold)),
+    threshold_is_inf = str_to_upper(calibration_threshold_raw) == "INF",
+    calibration_threshold_num = suppressWarnings(as.numeric(calibration_threshold_raw))
+  )
+```
+#### Join detections with calibration thresholds
+```{r}
+joined_data <- all_detections %>%
+  left_join(
+    calibration,
+    by = c("detection_common_name" = "calibration_common_name")
+  ) %>%
+  mutate(
+    threshold_is_inf = ifelse(is.na(calibration_threshold_raw), TRUE, threshold_is_inf),
+    calibration_status = case_when(
+      is.na(calibration_threshold_raw) ~ "not_in_calibration_treated_as_INF",
+      threshold_is_inf ~ "INF_in_calibration",
+      TRUE ~ "numeric_threshold"
+    )
+  )
+```
+#### Split detections into categories
+```{r}
+inf_detections <- joined_data %>%
+  filter(threshold_is_inf)
+
+kept_detections <- joined_data %>%
+  filter(
+    !threshold_is_inf,
+    !is.na(calibration_threshold_num),
+    !is.na(detection_confidence),
+    detection_confidence >= calibration_threshold_num
+  )
+
+removed_detections <- joined_data %>%
+  filter(
+    !threshold_is_inf,
+    !is.na(calibration_threshold_num),
+    !is.na(detection_confidence),
+    detection_confidence < calibration_threshold_num
+  )
+```
+#### Export files
+```{r}
+write_csv(kept_detections, file.path(output_dir, "detections_kept_gte_threshold.csv"))
+write_csv(inf_detections, file.path(output_dir, "detections_threshold_INF.csv"))
+write_csv(removed_detections, file.path(output_dir, "detections_removed_below_threshold.csv"))
+write_csv(all_detections, file.path(output_dir, "detections_Hoh_Ells_CW.csv"))
+```

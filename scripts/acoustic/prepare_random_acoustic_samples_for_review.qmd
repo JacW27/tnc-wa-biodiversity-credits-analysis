@@ -1,0 +1,200 @@
+---
+title: "Random selection"
+subtitle: "An R-driven workflow"
+author: "Jacqueline Wu"
+date: "2025-11-22"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+needed <- c("vroom", "dplyr", "stringr", "readr", "fs", "tidyr", "lubridate", "writexl")
+to_install <- setdiff(needed, rownames(installed.packages()))
+if (length(to_install)) install.packages(to_install, quiet = TRUE)
+invisible(lapply(needed, library, character.only = TRUE))
+```
+#### import CSVs and select columns
+```{r}
+path_hoh <- "E:/merge_all/Outputs/Hoh/clean_Hoh_ALL.csv"
+path_cw <- "E:/merge_all/Outputs/Clearwater/clean_Clearwater_ALL.csv"
+path_ew <- "E:/merge_all/Outputs/Ellsworth/clean_Ellsworth_ALL.csv"
+
+df_hoh <- vroom::vroom(path_hoh, show_col_types = FALSE, progress = FALSE)
+df_cw <- vroom::vroom(path_cw, show_col_types = FALSE, progress = FALSE)
+df_ew <- vroom::vroom(path_ew, show_col_types = FALSE, progress = FALSE)
+# How many rows dfs have before filtering
+nrow(df_hoh)
+nrow(df_cw)
+nrow(df_ew)
+```
+#### Filter confidence level lower than 0.5
+```{r}
+df_hoh <- df_hoh |> dplyr::filter(!is.na(Confidence), Confidence >= 0.5)
+df_cw  <- df_cw  |> dplyr::filter(!is.na(Confidence), Confidence >= 0.5)
+df_ew  <- df_ew  |> dplyr::filter(!is.na(Confidence), Confidence >= 0.5)
+# How many rows dfs have after filtering?
+nrow(df_hoh)
+nrow(df_cw)
+nrow(df_ew)
+# Keep necessary columns
+df_hoh <- df_hoh %>% dplyr::select(site = study_site, plot = plot_number, aru = aru_number, date = record_date, hour = record_hour, species = common_name, start_s = `Start (s)`, end_s = `End (s)`, confidence = Confidence)
+df_cw  <- df_cw %>% dplyr::select(site = study_site, plot = plot_number, aru = aru_number, date = record_date, hour = record_hour, species = common_name, start_s = `Start (s)`, end_s = `End (s)`, confidence = Confidence)
+df_ew  <- df_ew %>% dplyr::select(site = study_site, plot = plot_number, aru = aru_number, date = record_date, hour = record_hour, species = common_name, start_s = `Start (s)`, end_s = `End (s)`, confidence = Confidence)
+# save CSV
+out_dir <- "E:/merge_all/Outputs"
+fs::dir_create(out_dir)  
+
+readr::write_csv(df_hoh, fs::path(out_dir, "clean_Hoh_0.5.csv"))
+readr::write_csv(df_cw,  fs::path(out_dir, "clean_Clearwater_0.5.csv"))
+readr::write_csv(df_ew,  fs::path(out_dir, "clean_Ellsworth_0.5.csv"))
+```
+#### Extract species by study site
+```{r}
+df_all <- dplyr::bind_rows(
+  df_hoh,
+  df_cw,
+  df_ew
+)
+
+species_by_site <- df_all |>
+  dplyr::distinct(site, species) |> 
+  dplyr::arrange(site, species)
+
+readr::write_csv(species_by_site,  fs::path(out_dir, "species_by_site_status.csv"))
+```
+#### test if species by site has any problems
+```{r}
+# check
+path_check <- "E:/merge_all/Outputs/Hoh/Hoh_ALL_plots.csv"
+df_check <- vroom::vroom(path_check, show_col_types = FALSE, progress = FALSE)
+any(df_check$"Common name" == "American Robin")
+any(df_check$"Common name" == "American Crow")
+```
+#### select random audio clips for checking
+```{r}
+path_hoh_all <- "E:/merge_all/Outputs/Hoh/Hoh_ALL_plots.csv"
+path_cw_all  <- "E:/merge_all/Outputs/Clearwater/Clearwater_ALL_plots.csv"
+path_ew_all  <- "E:/merge_all/Outputs/Ellsworth/Ellsworth_ALL_plots.csv"
+
+df_h <- vroom::vroom(path_hoh_all, show_col_types = FALSE, progress = FALSE)
+df_c  <- vroom::vroom(path_cw_all, show_col_types = FALSE, progress = FALSE)
+df_e <- vroom::vroom(path_ew_all, show_col_types = FALSE, progress = FALSE)
+
+clean_one_df <- function(df) {
+  df %>%
+    dplyr::rename(common_name = `Common name`) %>%
+    dplyr::filter(`Scientific name` != "Abiotic",
+                  common_name != "Biotic Insect",
+                  common_name != "Biotic Anuran") %>%
+    dplyr::filter(!is.na(Confidence), Confidence >= 0.5)
+}
+df_list <- list(df_h = df_h, df_c = df_c, df_e = df_e)
+df_list_clean <- lapply(df_list, clean_one_df)
+df_h <- df_list_clean$df_h
+df_c <- df_list_clean$df_c
+df_e <- df_list_clean$df_e
+
+df_h <- df_h %>% dplyr::select(site = study_site, plot = plot_number, aru = aru_number, date = record_date, hour = record_hour, species = common_name, start_s = `Start (s)`, end_s = `End (s)`, confidence = Confidence, source = `source_file`)
+df_c  <- df_c %>% dplyr::select(site = study_site, plot = plot_number, aru = aru_number, date = record_date, hour = record_hour, species = common_name, start_s = `Start (s)`, end_s = `End (s)`, confidence = Confidence, source = `source_file`)
+df_e  <- df_e %>% dplyr::select(site = study_site, plot = plot_number, aru = aru_number, date = record_date, hour = record_hour, species = common_name, start_s = `Start (s)`, end_s = `End (s)`, confidence = Confidence, source = `source_file`)
+# for each species, randomly sample up to 50 detections
+sample_up_to_50_per_species <- function(dat) {
+  # Split the dataframe into a list by species
+  sp_list <- split(dat, dat$species)
+  # For each species-specific df, sample up to 50 rows
+  sampled_list <- lapply(sp_list, function(g) {
+    n_rows <- nrow(g)  # number of detections for this species
+    if (n_rows <= 50) {
+      # If there are 50 or fewer rows, keep all
+      return(g)
+    } else {
+      # If there are more than 50 rows, randomly sample 50
+      idx <- sample.int(n_rows, 50) # random row indices
+      return(g[idx, , drop = FALSE])
+    }
+})
+  dplyr::bind_rows(sampled_list)
+}
+set.seed(123)
+df_h_sampled <- sample_up_to_50_per_species(df_h)
+df_c_sampled <- sample_up_to_50_per_species(df_c)
+df_e_sampled <- sample_up_to_50_per_species(df_e)
+
+readr::write_csv(df_h_sampled, fs::path(out_dir, "random_Hoh_50.csv"))
+readr::write_csv(df_c_sampled,  fs::path(out_dir, "random_Clearwater_50.csv"))
+readr::write_csv(df_e_sampled,  fs::path(out_dir, "random_Ellsworth_50.csv"))
+```
+#### advanced Ellsworth random selection
+```{r}
+# Get the list of species that appear in Hoh and/or Clearwater
+species_other_sites <- union(unique(df_h$species), unique(df_c$species))
+
+set.seed(123)  # for reproducibility
+sample_ellsworth_advanced <- function(dat, species_other_sites) {
+  # dat: Ellsworth data frame (df_e), already cleaned and with a "species" column
+
+  # Split the Ellsworth data frame into a list of data frames by species
+  sp_list <- split(dat, dat$species)
+  
+  # Apply sampling rules species by species
+  sampled_list <- lapply(names(sp_list), function(sp) {
+    g <- sp_list[[sp]]  # data for one species
+    n_det <- nrow(g)  # number of detections for this species in Ellsworth
+    
+    # Decide how many rows to keep for this species
+    if (sp %in% species_other_sites) {
+      # Species is shared with Hoh/Clearwater: keep up to 50 detections
+      n_keep <- min(50L, n_det)
+    } else {
+      # Species appears only in Ellsworth
+      if (n_det > 150L) {
+        # More than 150 detections: keep 100
+        n_keep <- 100L
+      } else {
+        # 150 or fewer detections: keep all
+        n_keep <- n_det
+      }
+    }
+    
+    # If we are keeping all rows, no need to call sample()
+    if (n_keep == n_det) {
+      return(g)
+    } else {
+      # Randomly select row indices to keep
+      idx <- sample.int(n_det, n_keep)
+      return(g[idx, , drop = FALSE])
+    }
+  })
+  
+  # Combine all species-specific sampled data frames back into one
+  dplyr::bind_rows(sampled_list)
+}
+
+# Apply the advanced sampling to Ellsworth (df_e)
+df_e_sampled_advanced <- sample_ellsworth_advanced(df_e, species_other_sites)
+
+df_e_sampled_advanced %>%
+  dplyr::count(species, name = "n_sampled") %>%
+  dplyr::arrange(dplyr::desc(n_sampled)) %>%
+  View()
+
+df_e_counts <- df_e %>%
+  dplyr::group_by(species) %>%
+  dplyr::summarise(
+    n_det = dplyr::n(), # number of detections
+    .groups = "drop"
+  ) %>%
+  dplyr::arrange(desc(n_det))
+
+# 5. Write the advanced Ellsworth sample to CSV
+readr::write_csv(
+  df_e_sampled_advanced,
+  fs::path(out_dir, "random_Ellsworth_advanced_50_100.csv")
+)
+
+```

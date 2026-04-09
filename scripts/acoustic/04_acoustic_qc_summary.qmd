@@ -1,0 +1,146 @@
+---
+title: "Clean ALL plots with brief summary"
+subtitle: "An R-driven workflow"
+author: "Jacqueline Wu"
+date: "2025-10-19"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+```{r}
+#| label: setup
+#| include: false
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+# install only if missing, then load
+needed <- c("vroom","dplyr","readr","stringr","fs","ggplot2","tidyr","readxl")
+to_install <- setdiff(needed, rownames(installed.packages()))
+if (length(to_install)) install.packages(to_install, dependencies = TRUE, quiet = TRUE)
+invisible(lapply(needed, library, character.only = TRUE))
+```
+#### load the dataframe
+```{r}
+in_path  <- "E:/merge_all/Outputs/Ellsworth/clean_Ellsworth_ALL.csv"
+out_path <- sub("\\.csv$", "_clean.csv", in_path)
+
+df <- vroom::vroom(in_path, show_col_types = FALSE)
+# check df
+class(df)
+dim(df)
+str(df, max.level = 1)
+```
+#### remove Abiotic predictions and clean the dataframe
+```{r}
+df <- df %>% dplyr::rename(common_name = `Common name`)
+n_before <- nrow(df)
+df <- df %>% 
+  dplyr::filter(`Scientific name` != "Abiotic")
+df <- df %>% 
+  dplyr::filter(`common_name` != "Biotic Insect")
+df <- df %>% 
+  dplyr:: filter(`common_name` != "Biotic Anuran")
+n_removed <- n_before - nrow(df)
+n_removed / n_before * 100
+# remove source_file and label columns
+df <- df %>% dplyr::select(-dplyr::any_of(c("source_file","Label")))
+
+# make key columns have the right types
+df <- df %>%
+  mutate(
+    study_site  = as.character(study_site),
+    plot_number = as.integer(plot_number),
+    aru_number  = as.integer(aru_number),
+    record_date = as.Date(record_date),
+    record_hour = as.integer(record_hour)
+  )
+```
+#### play around with the dataframe
+```{r}
+# When are calls most frequent? By record hour
+hourly_counts <- df %>%
+  filter(!is.na(record_hour), dplyr::between(record_hour, 0, 23)) %>%
+  count(record_hour, name = "n") %>%
+  complete(record_hour = 0:23, fill = list(n = 0)) %>%
+  arrange(record_hour)
+    # Line
+    ggplot(hourly_counts, aes(x = record_hour, y = n)) +
+      geom_line() +
+      geom_point() +
+      labs(title = "Detections by Hour (Line)", x = "Hour of Day (0–23)", y = "Count") +
+      scale_x_continuous(breaks = 0:23) +
+      theme_minimal()
+    
+# Which plots are high? By plot number
+plot_counts <- df %>%
+  filter(!is.na(plot_number)) %>%
+  count(plot_number, name = "n") %>%
+  arrange(desc(n))
+
+ggplot(plot_counts, aes(x = reorder(factor(plot_number), n), y = n)) +
+  geom_col() +
+  geom_text(aes(label = n), hjust = -0.1, size = 3) +
+  coord_flip() +
+  labs(title = paste("Plots by Detections"),
+       x = "Plot number", y = "Count") +
+  theme_minimal()
+
+# Which species dominate? By species
+species_counts <- df %>%
+  dplyr::filter(!is.na(common_name), common_name != "") %>%
+  dplyr::count(common_name, name = "n") %>%
+  dplyr::arrange(dplyr::desc(n))
+species_counts
+
+# Daily frequency line by record date
+daily_counts <- df %>%
+  filter(!is.na(record_date)) %>%
+  count(record_date, name = "n") %>%
+  arrange(record_date)
+
+ggplot(daily_counts, aes(x = record_date, y = n)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Detections by Date", x = "Date", y = "Count") +
+  theme_minimal()
+```
+#### Confidence level
+```{r}
+conf_cols <- intersect(c("Confidence","Confidence_source","Confidence_target"), names(df))
+# Long format for shared summaries/plots
+conf_long <- df %>%
+  dplyr::select(all_of(conf_cols)) %>%
+  tidyr::pivot_longer(everything(), names_to = "metric", values_to = "value")
+
+# Summary table
+conf_summary <- conf_long %>%
+  group_by(metric) %>%
+  summarise(
+    n             = n(),
+    n_non_missing = sum(!is.na(value)),
+    n_na          = sum(is.na(value)),
+    mean          = mean(value, na.rm = TRUE),
+    median        = median(value, na.rm = TRUE),
+    sd            = sd(value, na.rm = TRUE),
+    min           = min(value, na.rm = TRUE),
+    q05           = quantile(value, 0.05, na.rm = TRUE, type = 7),
+    q25           = quantile(value, 0.25, na.rm = TRUE, type = 7),
+    q75           = quantile(value, 0.75, na.rm = TRUE, type = 7),
+    q95           = quantile(value, 0.95, na.rm = TRUE, type = 7),
+    max           = max(value, na.rm = TRUE),
+    .groups = "drop"
+  )
+conf_summary
+
+# Box plot by metric
+ggplot(conf_long, aes(x = metric, y = value)) +
+  geom_boxplot(na.rm = TRUE) +
+  labs(title = "Confidence Boxplots", x = "", y = "Value") +
+  theme_minimal()
+```
+#### save the file
+```{r}
+clean_Hoh_ALL <- df
+readr::write_csv(clean_Hoh_ALL, "E:/merge_all/Site/clean_Hoh_ALL.csv")
+```

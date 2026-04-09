@@ -1,0 +1,441 @@
+---
+title: "Camera Result Analysis"
+subtitle: "An R-driven workflow"
+author: "Jacqueline Wu"
+date: "2025-08-1"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+```{r}
+#| label: setup
+#| include: false
+invisible(lapply(
+  c("readxl","readr","dplyr","tidyr","ggplot2","purrr", "ggrepel", "stringr","vegan","lubridate","scales","writexl","indicspecies"),
+  library, character.only = TRUE))
+```
+
+#### 1. Load Wildlife Result and create dataframes
+```{r}
+exclude <- c(
+  "American Robin",
+  "Bird",
+  "Dark-eyed Junco",
+  "Northern Flicker",
+  "Pileated Woodpecker",
+  "Sooty Grouse",
+  "Steller's Jay",
+  "Varied Thrush",
+  "Wilson's Warbler",
+  "Downy Woodpecker",
+  "Unknown"
+)
+
+df <- read_xlsx("D:\\HuaweiMoveData\\Users\\jacqu\\Desktop\\wildlife_results.xlsx") %>%
+  dplyr::filter(!common_name %in% exclude)
+
+df_habitat <- read_xlsx("C:\\Users\\jacqu\\Downloads\\Plots_location_final.xlsx")
+spcies_list <- dplyr::distinct(df, common_name) %>% print.data.frame()
+```
+#### 2. Event collapsing with 10 min windows
+**Goal**
+Collapse consecutive camera-triggered photos into a single "event" so we don’t  
+over-count the same animal lingering in front of the camera.
+
+**Definition of One Event**
+For each camera (deployment_id) and species (common_name), we walk through the photos in time order. We start a new event at the first photo, then keep adding photos to the current event until the time gap to the previous photo exceeds the window - 10 minutes. If the gap > 10 min, we start a new event.  
+
+The 10-minute window is a rolling, gap-based inactivity timeout measured between successive photos, not aligned to clock times/calendar days. It starts at the first photo in a streak and resets whenever there is a  
+gap > 10 minutes, so an event can cross midnight if gaps stay <= 10 minutes.
+
+** Code Comment**
+One row per collapsed event with:  
+- **event_start_time**: timestamp of the first photo in the event (UTC)  
+- **event_end_time**: timestamp of the last photo in the event (UTC)  
+- **n_frames_in_event**: number of photos merged into that event  
+- **max_number_of_objects**: maximum count detected within the event  
+- **event_duration_sec**: end_time - start_time (seconds)  
+- **window_min**: the window used (min)
+```{r}
+collapse_events <- function(data, window_min) {
+  stopifnot(all(c("deployment_id", "common_name", "timestamp", "number_of_objects") %in% names(data)))
+
+data %>%
+  mutate(
+    timestamp = as.POSIXct(timestamp, tz = "UTC"),
+    number_of_objects = suppressWarnings(as.numeric(number_of_objects))
+    ) %>%
+    arrange(deployment_id, common_name, timestamp) %>%
+    group_by(deployment_id, common_name) %>%
+    mutate(
+      prev_time = lag(timestamp),
+      new_event = if_else(
+        is.na(prev_time) | 
+          as.numeric(difftime(timestamp, prev_time, units = "secs")) > window_min * 60,
+        1L, 0L),
+      event_id = cumsum(coalesce(new_event, 1L))
+    ) %>%
+    ungroup() %>%
+    group_by(deployment_id, common_name, event_id) %>%
+    summarize(
+      event_start_time = min(timestamp, na.rm = TRUE),
+      event_end_time = max(timestamp, na.rm = TRUE),
+      n_frames_in_event = n(),
+      max_number_of_objects = suppressWarnings(max(number_of_objects, na.rm = TRUE)),
+      event_duration_sec= as.numeric(event_end_time - event_start_time, units = "secs"),
+      .groups = "drop"
+    ) %>%
+    mutate(window_min = window_min)
+}
+all_events <- collapse_events(df, window_min = 10) %>%
+  dplyr::mutate(site = stringr::str_remove(deployment_id, "_.*$")) # If you want to change detection window time, please put a new detection window time after "window_min="
+```
+#### 3. Basic summary
+```{r}
+species_composition_overall <- all_events %>%
+  group_by(common_name, window_min) %>%
+  summarise(
+    events = n(),
+    total_frames = sum(n_frames_in_event, na.rm = TRUE)
+  ) %>%
+  mutate(proportion_events = events / sum(events)) %>% 
+  print.data.frame()
+
+species_composition_overall %>%
+  ggplot(aes(x = reorder(common_name, events), y = events)) +
+  geom_col(fill = "lightblue") +
+  geom_text(aes(label = events), vjust = -0.3, size = 3) + 
+  labs(
+    title = "Overall Species Composition",
+    x = "Species",
+    y = "Number of Events"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        plot.title = element_text(hjust = 0.5, size = 16))
+
+species_by_site <- all_events %>%
+  group_by(site, common_name) %>%
+  summarise(
+    events = n(),
+    total_frames = sum(n_frames_in_event, na.rm = TRUE),
+    .groups = "drop_last"
+  ) %>%
+  mutate(proportion_events = events / sum(events))
+```
+#### 4. Site comparisons
+```{r}
+# Pie charts of species composition by site, based on proportion of events
+my_cols <- c(
+  "#8DD3C7", "#FFFFB3", "#BEBADA", "#FB8072", "#80B1D3",
+  "#FDB462", "#B3DE69", "#FCCDE5", "#D9D9D9", "#BC80BD",
+  "#CCEBC5", "#FFED6F", "#E0C2FF", "#FFD8B1", "#C2E0FF"
+)
+
+species_levels <- sort(unique(species_by_site$common_name))
+if (length(species_levels) > length(my_cols)) {
+  my_cols <- grDevices::colorRampPalette(my_cols)(length(species_levels))
+}
+
+species_pie <- species_by_site %>%
+  mutate(common_name = factor(common_name, levels = species_levels)) %>%
+  group_by(site) %>%
+  arrange(site, common_name) %>%
+  mutate(
+    csum = rev(cumsum(rev(proportion_events))),
+    pos  = proportion_events/2 + dplyr::lead(csum, 1),
+    pos  = dplyr::if_else(is.na(pos), proportion_events/2, pos),
+    label = paste0(common_name, " ", scales::percent(proportion_events, accuracy = 1))
+  ) %>%
+  ungroup()
+species_colors <- setNames(my_cols[seq_along(species_levels)], species_levels)
+
+plot_site_pie <- function(site_name) {
+  df_site <- filter(species_pie, site == site_name)
+  
+ggplot(df_site, aes(x = "", y = proportion_events, fill = common_name)) +
+  geom_col(width = 1, color = "white") +
+  coord_polar(theta = "y") +
+  scale_fill_manual(values = species_colors, name = "Species") +
+  geom_label_repel(
+    aes(y = pos, label = label),
+    nudge_x = 1.2, size = 3, show.legend = FALSE
+  ) +
+  labs(
+    title = paste("Species Composition -", site_name),
+    x = NULL, y = NULL
+  ) +
+  theme_void(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    legend.position = "right"
+  )
+}
+plot_site_pie("Clearwater")
+plot_site_pie("Ellsworth")
+plot_site_pie("Hoh")
+# Species Composition Comparison by site based on event count
+ggplot(species_by_site, aes(x = site, y = events, fill = common_name)) +
+  geom_col(position = "stack", colour = "black", linewidth = 0.1) +
+  scale_fill_manual(values = species_colors, name = "Species") + 
+  labs(title = "Species Composition by Site (Event Counts)",
+       x = "Site", y = "Number of Events") +
+  theme_minimal(base_size = 10) +
+  theme(plot.title = element_text(hjust = 0.5))
+# Common species by site (event count)
+top5_by_site <- species_by_site %>%
+  group_by(site) %>%
+  slice_max(order_by = events, n = 5, with_ties = FALSE) %>%
+  arrange(site, events) %>%
+  mutate(common_name_site = paste(site, common_name, sep = "__")) %>%
+  group_by(site) %>%
+  mutate(
+    common_name_site = factor(common_name_site, levels = common_name_site[order(events)])
+  ) %>%
+  ungroup() %>% 
+  print.data.frame()
+
+ggplot(top5_by_site,
+       aes(x = common_name, y = events, fill = site)) + 
+  geom_col(position = "dodge") +
+  geom_text(aes(label = events),
+            position = position_dodge(width = 0.9),
+            vjust = -0.3, size = 3.5) +
+  scale_fill_brewer(palette = "Set2", name = "Site") + 
+  labs(title = "Distribution of common species",
+       x = "Species", y = "Events") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+#### 5. Alpha diversity metrics
+```{r}
+# Site x Species matrix
+site_species_counts <- all_events %>%
+  mutate(site = str_remove(deployment_id, "_.*$")) %>%
+  count(site, common_name, name = "events")
+site_species_matrix <- site_species_counts %>%
+  pivot_wider(names_from = common_name, values_from = events, values_fill = 0)
+  # community matrix | row - site, column - species
+  comm <- site_species_matrix %>% select(-site) %>% as.data.frame()
+  rownames(comm) <- site_species_matrix$site
+  
+richness <- specnumber(comm) 
+shannon  <- diversity(comm, index = "shannon")
+evenness <- shannon / log(richness)
+
+alpha_diversity <- tibble(
+  site = rownames(comm),
+  richness = as.numeric(richness),
+  shannon  = as.numeric(shannon),
+  evenness = as.numeric(evenness)
+) %>% arrange(site) %>% 
+  print()
+
+# group by habitats
+```
+#### 6. # of Events/day/species/camera
+**all_events (after the mutate)**: The master event table.
+Grain: One row = one collapsed event (10-min inactivity window), per deployment_id × common_name.
+Key columns:
+  site – parsed from deployment_id.
+  date – local calendar date of the event start time (event_start_time) in tz_local ( "America/Los_Angeles"). An event is counted on the day it starts; it may cross midnight if gaps ≤ 10 min.
+  Use: Ground truth for all counts. Any aggregation should be derived from this table (use n() since each row is one event).
+
+**events_by_day_species_camera**: Daily event counts at the finest reporting level.
+Grain: site × camera (deployment_id) × date × species (common_name) for days with ≥1 event.
+Columns:
+  events – number of events that started on that date (count of rows in all_events for that group).
+Zero-event days are absent.
+
+**species_camera_summary**: Per-camera × species roll-up across the whole period.
+Grain: site × camera × species.
+Columns:
+  days_active – number of distinct dates with ≥1 event, not total operating days.
+  total_events – total events over the study period.
+  mean_events_per_day, median_events_per_day, sd_events_per_day, max_events_per_day – summary stats   across the subset of days that had ≥1 event.
+
+**events_by_day_camera**: Daily totals per camera, all species combined.
+Grain: site × camera × date.
+Columns:
+  events = sum of species-level events for that camera/day.
+  Use: Plot camera activity through time; compute per-camera rates when joined to effort.
+
+**events_by_day_species**: Daily totals per species within each site (pooled across cameras).
+Grain: site × species × date.
+Columns:
+  events = sum of camera-level events for that species/day within the site.
+  Use: Species-level temporal patterns by site; inputs to daily composition plots.
+
+**events_by_day_site**: Daily totals per site (all cameras & species).
+Grain: site × date.
+Columns:
+  events = sum of all events started that day at the site.
+  Use: Site-level activity timelines; quick comparison of overall intensity.
+```{r}
+tz_local <- "America/Los_Angeles"
+
+# Identify Site from deployment_id
+all_events <- all_events %>%
+  mutate(
+    site = if (!"site" %in% names(.)) str_remove(deployment_id, "_.*$") else site,
+    date = as.Date(with_tz(event_start_time, tz_local)))
+# events / day / species / camera
+events_by_day_species_camera <- all_events %>%
+  group_by(site, deployment_id, date, common_name) %>%
+  summarise(
+    events = n(),
+    .groups = "drop"
+  )
+# Summary per camera × species
+species_camera_summary <- events_by_day_species_camera %>%
+  group_by(site, deployment_id, common_name) %>%
+  summarise(
+    days_active = n_distinct(date),
+    total_events = sum(events),     
+    mean_events_per_day = mean(events),    
+    median_events_per_day = median(events),
+    sd_events_per_day = sd(events),
+    max_events_per_day = max(events),
+    .groups = "drop"
+  ) %>%
+  arrange(site, deployment_id, desc(total_events))
+# events / day / camera
+events_by_day_camera <- events_by_day_species_camera %>%
+  group_by(site, deployment_id, date) %>%
+  summarise(events = sum(events), .groups = "drop")
+# events / day / species
+events_by_day_species <- events_by_day_species_camera %>%
+  group_by(site, common_name, date) %>%
+  summarise(events = sum(events), .groups = "drop")
+# events / day / site
+events_by_day_site <- events_by_day_species_camera %>%
+  group_by(site, date) %>%
+  summarise(events = sum(events), .groups = "drop")
+```
+#### 7. Habitat type analysis - Prep Step
+```{r}
+all_events <- all_events %>%
+  mutate(
+    site = if (!"site" %in% names(.)) str_remove(deployment_id, "_.*$") else site,
+    cam_num = str_extract(deployment_id, "(?<=_)\\d+(?=_)") %>% as.integer()
+  )
+
+df_habitat <- df_habitat %>%
+  mutate(
+    site = as.character(site),
+    PlotID = as.integer(PlotID)
+  ) %>%
+  distinct(site, PlotID, cluster)
+# Join Habitat dataframe with event dataframe
+events_with_cluster <- all_events %>%
+  left_join(df_habitat, by = c("site" = "site", "cam_num" = "PlotID")) %>%
+  mutate(cluster = ifelse(is.na(cluster), "Unknown habitat", as.character(cluster)))
+```
+#### 8. Habitat type analysis - Actual analysis
+```{r}
+# Site x habitat x species
+species_by_site_hab <- events_with_cluster %>%
+  group_by(site, cluster, common_name) %>%
+  summarise(
+    events = n_distinct(event_id),
+    total_frames = sum(n_frames_in_event, na.rm = TRUE),
+    .groups = "drop_last"
+  ) %>%
+  group_by(site, cluster) %>%
+  mutate(proportion_events = events / sum(events)) %>%
+  ungroup()
+
+ggplot(species_by_site_hab, aes(x = site, y = events, fill = common_name)) +
+  geom_col(position = "fill", colour = "black", linewidth = 0.2) +
+  facet_wrap(~ cluster) +
+  scale_y_continuous(labels = percent_format()) +
+  scale_fill_viridis_d(option = "turbo", name = "Species") +
+  labs(title = "Species Proportion Composition by Site (faceted by Habitat)",
+       x = "Site", y = "Proportion of Events") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(hjust = 0.2)) + 
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 10)
+  )
+
+ggplot(species_by_site_hab, aes(x = site, y = events, fill = common_name)) +
+  geom_col(position = "stack", colour = "black", linewidth = 0.2) +
+  facet_wrap(~ cluster, scales = "free_y") +
+  scale_fill_viridis_d(option = "turbo", name = "Species") +
+  labs(title = "Species Composition by Site (Event Counts, faceted by Habitat)",
+       x = "Site", y = "Number of Events") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(hjust = 0.1)) + 
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 10)
+  )
+
+# Chi-square test of independence to check if species composition is independent of habitat types
+clust_sp_counts <- events_with_cluster %>%
+  count(cluster, common_name, name = "events")
+
+clust_sp_mat <- clust_sp_counts %>%
+  pivot_wider(names_from = common_name, values_from = events, values_fill = 0)
+
+comm_clust <- clust_sp_mat %>% select(-cluster) %>% as.matrix()
+rownames(comm_clust) <- clust_sp_mat$cluster
+chisq_out_hab <- chisq.test(comm_clust)
+chisq_out_hab # Received a warning that suggests some expected cell counts are small
+# Conduct Fisher's exact test
+tab <- comm_clust
+fish <- fisher.test(tab, simulate.p.value = TRUE, B = 1e5) 
+fish # Based on the result value, species composition varied by habitat.
+```
+#### 9. Common species per habitat
+```{r}
+species_by_habitat <- events_with_cluster %>%
+  count(cluster, common_name, name = "events") %>%
+  group_by(cluster) %>%
+  mutate(proportion_events = events / sum(events)) %>%
+  ungroup()
+
+top5_hab <- species_by_habitat %>%
+  group_by(cluster) %>%
+  slice_max(order_by = events, n = 5, with_ties = FALSE) %>%
+  arrange(cluster, events) %>%
+  mutate(sp_hab = paste(cluster, common_name, sep = "__")) %>%
+  group_by(cluster) %>%
+  mutate(sp_hab = factor(sp_hab, levels = sp_hab[order(events)])) %>%
+  ungroup()
+
+ggplot(top5_hab, aes(x = common_name, y = events, fill = cluster)) +
+  geom_col(position = "dodge", colour = "black", linewidth = 0.25) +
+  geom_text(aes(label = events),
+            position = position_dodge(width = 0.9),
+            vjust = -0.3, size = 3.2) +
+  scale_fill_brewer(palette = "Set2", name = "Habitat Type") +
+  labs(title = "Common Species per Habitat (by Event Count)",
+       x = "Species", y = "Events") +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+#### Export analysis
+```{r, eval=FALSE}
+out_dir <- "D:/HuaweiMoveData/Users/jacqu/Desktop"
+stamp <- format(Sys.time(), "%Y%m%d_%H%M")
+out_file <- file.path(out_dir, paste0("wildlife_events_", stamp, ".xlsx"))
+
+write_xlsx(
+  list(
+    alpha_diversity = alpha_diversity,
+    species_composition_overall = species_composition_overall,
+    events_by_day_species_cam = events_by_day_species_camera,
+    events_by_day_species = events_by_day_species,
+    events_by_day_camera = events_by_day_camera,
+    species_camera_summary = species_camera_summary,
+    events_by_day_site = events_by_day_site
+  ),
+  path = out_file
+)
+```

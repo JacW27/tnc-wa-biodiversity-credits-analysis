@@ -1,0 +1,35 @@
+---
+title: "Unsplit folders"
+subtitle: "An R-driven workflow"
+author: "Jacqueline Wu"
+date: "2025-08-11"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+```{r}
+#| label: setup
+#| include: false
+```
+
+#### 1. Merge all WAV files from subfolders into one folder
+```{r}
+src  <- "E:/Ellsworth Audio Data/PlotOG_597/SplitData"  # folder that contains part_* subfolders; change it based on the folder location
+dest <- "E:/Ellsworth Audio Data/PlotOG_597/UnsplitData"     # target folder to collect everything; change it based on the folder location
+
+# Create target folder if missing
+# dir.create(dest, showWarnings = FALSE, recursive = TRUE)
+
+# List all .wav files recursively
+files <- list.files(src, pattern = "\\.wav$", recursive = TRUE, full.names = TRUE)
+
+# Build destination paths; make names unique to avoid overwriting
+base_names <- basename(files)
+dest_names <- make.unique(base_names)
+dest_paths <- file.path(dest, dest_names)
+
+# Move the files
+ok <- file.rename(files, dest_paths)
+```

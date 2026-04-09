@@ -1,0 +1,74 @@
+---
+title: "Extract file name"
+subtitle: "An R-driven workflow"
+author: "Jacqueline Wu"
+date: "2025-08-06"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+install.packages(c("lubridate","dplyr","stringr", "readxl", "writexl"))  # Load required libraries, install if needed
+library(dplyr)
+library(lubridate)
+library(stringr)
+library(readxl)
+library(writexl)
+```
+
+#### 1. Read in your merged data
+```{r}
+merged_results <- "C:\\Users\\jacqu\\Box\\Biodiversity Credits Project\\Audio Data Processing\\Hoh_DectectionPredictions\\Plot171_01\\HohPlot171_01merged_results_with_filename.xlsx"  # Change the file path based on your computer
+df <- read_excel(merged_results)
+```
+#### 2. Extract date and hour from the source_file name
+```{r}
+df <- df %>%
+  mutate(
+    file_base = str_remove(source_file, "\\.BirdNET\\.results\\.csv$"),
+    date_str = str_extract(file_base, "(?<=_)\\d{8}(?=_)"),
+    time_str = str_extract(file_base, "(?<=_\\d{8}_)\\d{6}$"),
+    date = ymd(date_str),
+    hour = str_sub(time_str, 1, 4)
+  ) %>%
+  select(-file_base, -date_str, -time_str)
+```
+#### 3. Summarize per species
+```{r}
+summary_by_species <- df %>%
+  group_by(`Common name`, date) %>%
+  summarise(
+    detections = n(),
+    median_confidence = median(Confidence, na.rm = TRUE),
+    sd_confidence = sd(Confidence, na.rm = TRUE),
+    median_confidence_source  = median(Confidence_source,  na.rm = TRUE),
+    sd_confidence_source = sd(Confidence_source, na.rm = TRUE),
+    median_confidence_target = median(Confidence_target, na.rm = TRUE),
+    sd_confidence_target = sd(Confidence_target, na.rm = TRUE),
+    .groups = "drop") %>%
+  group_by(`Common name`) %>%
+  summarise(
+    days_detected = n(),
+    avg_detections_per_day = mean(detections),
+    overall_median_confidence = median(median_confidence, na.rm = TRUE),
+    overall_sd_confidence = sd(median_confidence, na.rm = TRUE),
+    overall_median_src = median(median_confidence_source, na.rm = TRUE),
+    overall_sd_src = sd(median_confidence_source, na.rm = TRUE),
+    overall_median_target = median(median_confidence_target, na.rm = TRUE),
+    overall_sd_target = sd(median_confidence_target, na.rm = TRUE),
+    .groups = "drop")
+```
+#### 4. Export to CSV in your current working directory
+```{r}
+write_xlsx(
+  summary_by_species,
+  path = "HohPlot171_01summary_by_species.xlsx"
+)
+
+getwd() # Find the file (optional)
+```

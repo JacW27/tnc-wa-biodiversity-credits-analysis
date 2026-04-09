@@ -1,0 +1,199 @@
+---
+title: "Data Cleaning"
+subtitle: "An R-driven workflow"
+author: "Jacqueline Wu"
+date: "2025-11-02"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+needed <- c("vroom", "dplyr", "stringr", "readr", "fs", "tidyr", "lubridate")
+to_install <- setdiff(needed, rownames(installed.packages()))
+if (length(to_install)) install.packages(to_install, quiet = TRUE)
+invisible(lapply(needed, library, character.only = TRUE))
+```
+#### import CSVs and select columns
+```{r}
+path_hoh <- "E:/merge_all/Outputs/clean_Hoh_ALL.csv"
+path_cw  <- "E:/merge_all/Outputs/clean_Clearwater_ALL.csv"
+path_ew  <- "E:/merge_all/Outputs/Ellsworth/clean_Ellsworth_ALL.csv"
+
+df_hoh <- vroom::vroom(path_hoh, show_col_types = FALSE, progress = FALSE)
+df_cw  <- vroom::vroom(path_cw,  show_col_types = FALSE, progress = FALSE)
+df_ew  <- vroom::vroom(path_ew,  show_col_types = FALSE, progress = FALSE)
+
+df_hoh <- df_hoh %>% dplyr::select(site = study_site, plot = plot_number, aru = aru_number, date = record_date, hour = record_hour, species = common_name, start_s = `Start (s)`, end_s = `End (s)`)
+df_cw  <- df_cw %>% dplyr::select(site = study_site, plot = plot_number, aru = aru_number, date = record_date, hour = record_hour, species = common_name, start_s = `Start (s)`, end_s = `End (s)`)
+df_ew  <- df_ew %>% dplyr::select(site = study_site, plot = plot_number, aru = aru_number, date = record_date, hour = record_hour, species = common_name, start_s = `Start (s)`, end_s = `End (s)`)
+```
+#### 2/3 rule of a minute bin: 0 - 9 mins
+```{r}
+assign_minute_2over3 <- function(start_s, end_s) {
+  # clip to [0, 600]
+  s <- max(0, min(start_s, 599.999))
+  e <- max(s, min(end_s, 600.000))
+  
+  # fast path: short segments (<40 s) -> start minute
+  if ((e - s) < 40) return(floor(s / 60))
+
+  # general case: choose the minute bin with max overlap (>=40 s)
+  m_start <- floor(s / 60)
+  m_end   <- floor((max(e - 1e-9, s)) / 60)
+  mins <- m_start:m_end
+
+  overlaps <- sapply(mins, function(m) {
+    left  <- max(s, m * 60)
+    right <- min(e, (m + 1) * 60)
+    max(0, right - left)
+  })
+  # pick the minute with the largest overlap; if ties, earliest
+  mins[ which.max(overlaps) ]
+}
+
+
+df_hoh$minute <- mapply(assign_minute_2over3, df_hoh$start_s, df_hoh$end_s)
+df_cw$minute  <- mapply(assign_minute_2over3, df_cw$start_s, df_cw$end_s)
+
+df_hoh <- df_hoh %>% dplyr::select(site, plot, aru, date, hour, minute, species)
+df_cw  <- df_cw  %>% dplyr::select(site, plot, aru, date, hour, minute, species)
+
+df_ew$minute  <- mapply(assign_minute_2over3, df_ew$start_s, df_ew$end_s)
+df_ew <- df_ew %>% dplyr::select(site, plot, aru, date, hour, minute, species)
+```
+#### calculate detections and form a new table - per-minute tall format table
+```{r}
+per_min_hoh <- df_hoh %>%
+  dplyr::group_by(study_site = site,
+                  aru_number = aru,
+                  date,
+                  hour,
+                  minute,
+                  species) %>%
+  dplyr::summarise(detections = dplyr::n(), .groups = "drop") %>%
+  dplyr::arrange(study_site, aru_number, date, hour, minute, species)
+
+per_min_cw <- df_cw %>%
+  dplyr::group_by(study_site = site,
+                  aru_number = aru,
+                  date,
+                  hour,
+                  minute,
+                  species) %>%
+  dplyr::summarise(detections = dplyr::n(), .groups = "drop") %>%
+  dplyr::arrange(study_site, aru_number, date, hour, minute, species)
+
+per_min_ew <- df_ew %>%
+  dplyr::group_by(study_site = site,
+                  aru_number = aru,
+                  date,
+                  hour,
+                  minute,
+                  species) %>%
+  dplyr::summarise(detections = dplyr::n(), .groups = "drop") %>%
+  dplyr::arrange(study_site, aru_number, date, hour, minute, species)
+```
+#### calculate detections and form a new table - per-minute tall format table
+```{r}
+per_min_hoh <- df_hoh %>%
+  dplyr::group_by(study_site = site,
+                  aru_number = aru,
+                  date,
+                  hour,
+                  minute,
+                  species) %>%
+  dplyr::summarise(detections = dplyr::n(), .groups = "drop") %>%
+  dplyr::arrange(study_site, aru_number, date, hour, minute, species)
+
+per_min_cw <- df_cw %>%
+  dplyr::group_by(study_site = site,
+                  aru_number = aru,
+                  date,
+                  hour,
+                  minute,
+                  species) %>%
+  dplyr::summarise(detections = dplyr::n(), .groups = "drop") %>%
+  dplyr::arrange(study_site, aru_number, date, hour, minute, species)
+
+per_min_ew <- df_ew %>%
+  dplyr::group_by(study_site = site,
+                  aru_number = aru,
+                  date,
+                  hour,
+                  minute,
+                  species) %>%
+  dplyr::summarise(detections = dplyr::n(), .groups = "drop") %>%
+  dplyr::arrange(study_site, aru_number, date, hour, minute, species)
+```
+#### generate Species × ARU pivot 
+```{r}
+pivot_hoh <- per_min_hoh %>%
+  dplyr::group_by(species, aru_number) %>%
+  dplyr::summarise(total_detections = sum(detections), .groups = "drop") %>%
+  tidyr::pivot_wider(
+    names_from  = aru_number,
+    values_from = total_detections,
+    values_fill = 0
+  )
+
+pivot_cw <- per_min_cw %>%
+  dplyr::group_by(species, aru_number) %>%
+  dplyr::summarise(total_detections = sum(detections), .groups = "drop") %>%
+  tidyr::pivot_wider(
+    names_from  = aru_number,
+    values_from = total_detections,
+    values_fill = 0
+  )
+
+pivot_ew <- per_min_ew %>%
+  dplyr::group_by(species, aru_number) %>%
+  dplyr::summarise(total_detections = sum(detections), .groups = "drop") %>%
+  tidyr::pivot_wider(
+    names_from  = aru_number,
+    values_from = total_detections,
+    values_fill = 0
+  )
+
+aru_order_hoh <- sort(unique(per_min_hoh$aru_number))
+pivot_hoh <- pivot_hoh %>%
+  dplyr::mutate(TOTAL = rowSums(dplyr::across(tidyselect::any_of(as.character(aru_order_hoh))))) %>%
+  dplyr::select(species, tidyselect::any_of(as.character(aru_order_hoh)), TOTAL) %>%
+  dplyr::arrange(desc(TOTAL), species)
+
+aru_order_cw <- sort(unique(per_min_cw$aru_number))
+pivot_cw <- pivot_cw %>%
+  dplyr::mutate(TOTAL = rowSums(dplyr::across(tidyselect::any_of(as.character(aru_order_cw))))) %>%
+  dplyr::select(species, tidyselect::any_of(as.character(aru_order_cw)), TOTAL) %>%
+  dplyr::arrange(desc(TOTAL), species)
+
+aru_order_ew <- sort(unique(per_min_ew$aru_number))
+pivot_ew <- pivot_ew %>%
+  dplyr::mutate(TOTAL = rowSums(dplyr::across(tidyselect::any_of(as.character(aru_order_ew))))) %>%
+  dplyr::select(species, tidyselect::any_of(as.character(aru_order_ew)), TOTAL) %>%
+  dplyr::arrange(desc(TOTAL), species)
+```
+#### save new CSVs
+```{r}
+stamp <- format(Sys.Date(), "%Y%m%d")
+outroot <- "E:/outputs"
+dir.create(file.path(outroot, "Ellsworth"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(outroot, "Hoh"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(outroot, "Clearwater"), recursive = TRUE, showWarnings = FALSE)
+
+readr::write_csv(df_hoh, file.path(outroot, "Hoh", paste0("Hoh_min_no_detections", stamp, ".csv")))
+readr::write_csv(per_min_hoh, file.path(outroot, "Hoh", paste0("Hoh_detections_per_minute_", stamp, ".csv")))
+readr::write_csv(pivot_hoh,   file.path(outroot, "Hoh", paste0("Hoh_species_by_ARU_pivot_", stamp, ".csv")))
+
+readr::write_csv(df_cw, file.path(outroot, "Clearwater", paste0("Clearwater_min_no_detections", stamp, ".csv")))
+readr::write_csv(per_min_cw, file.path(outroot, "Clearwater", paste0("Clearwater_detections_per_minute_", stamp, ".csv")))
+readr::write_csv(pivot_cw, file.path(outroot, "Clearwater", paste0("Clearwater_species_by_ARU_pivot_", stamp, ".csv")))
+
+readr::write_csv(df_ew, file.path(outroot, "Ellsworth", paste0("Ellsworth_min_no_detections", stamp, ".csv")))
+readr::write_csv(per_min_ew, file.path(outroot, "Ellsworth", paste0("Ellsworth_detections_per_minute_", stamp, ".csv")))
+readr::write_csv(pivot_ew,   file.path(outroot, "Ellsworth", paste0("Ellsworth_species_by_ARU_pivot_", stamp, ".csv")))
+```

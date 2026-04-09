@@ -1,0 +1,62 @@
+---
+title: "Split a Folder into Five Parts"
+subtitle: "An R-driven workflow"
+author: "Jacqueline Wu"
+date: "2025-08-05"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+```{r}
+#| label: setup
+#| include: false
+```
+
+#### 1. Read arguments or hard-code paths
+```{r}
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) >= 2) {
+  input_dir  <- args[1]  # replace if hard-coding: your source folder
+  output_dir <- args[2]  # replace if hard-coding: your destination parent folder
+} else {
+  # Change these two lines:
+  input_dir  <- "C:/Users/jacqu/Box/Biodiversity Credits Project/ARU Data download/Ellsworth/Plot09_608/Data"  # YOUR input folder[Need to be changed based on your device]
+  output_dir <- "C:/Users/jacqu/Box/Biodiversity Credits Project/ARU Data download/Ellsworth/Plot09_608/SplitData"  # YOUR output parent folder[Need to be changed based on your device]
+}
+
+```
+#### 2. Configuration
+```{r}
+n_group   <- 5 # number of sub-folders
+```
+#### 3. Main process
+```{r}
+# List all files (non-recursive)
+files   <- list.files(input_dir, full.names = TRUE)
+n_files <- length(files)
+if (n_files == 0) stop("No files found in input_dir")
+# Sort files by name (so that ordering matches your explorer)
+files <- sort(files)
+# Compute how many files per group (sequential)
+chunk_size <- ceiling(n_files / n_group)
+# Assign group index based on position
+grp_indices <- ((seq_len(n_files) - 1) %/% chunk_size) + 1
+# Cap to n_group in case of rounding up
+grp_indices[grp_indices > n_group] <- n_group
+
+# Copy files into sub-folders named part_1 ... part_5
+for (i in seq_along(files)) {
+  grp    <- grp_indices[i]
+  subdir <- file.path(output_dir, paste0("part_", grp))
+  if (!dir.exists(subdir)) {
+    dir.create(subdir, recursive = TRUE)
+  }
+  file.copy(from = files[i],
+            to   = file.path(subdir, basename(files[i])))
+}
+
+message(sprintf("Done: %d files split into %d folders under '%s'.",
+                n_files, n_group, output_dir))
+```

@@ -1,0 +1,43 @@
+---
+title: "Merge detection results"
+subtitle: "An R-driven workflow"
+author: "Jacqueline Wu"
+date: "2025-08-06"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+install.packages(c("dplyr","writexl", "vroom"))  # Load required libraries, install if needed
+library(vroom)
+library(dplyr)
+library(writexl)
+```
+
+#### 1. Specify your data directory and list all “.results.csv” files
+```{r}
+data_dir <- "C:\\Users\\jacqu\\Box\\Biodiversity Credits Project\\Audio Data Processing\\Hoh_DectectionPredictions\\Plot171_01\\predictions"
+# Change data_dir to the folder on where the .results.csv files live
+files <- list.files(data_dir,
+                    pattern="\\.results\\.csv$",
+                    full.names=TRUE,
+                    recursive = TRUE,
+                    ignore.case = TRUE)
+```
+#### 2. Read each CSV, add a source_file column, and combine into one data frame
+```{r}
+all_data <- vroom::vroom(files, id = "source_file") %>% 
+  mutate(source_file = basename(source_file)) %>% 
+  relocate(source_file, .before = everything())
+```
+#### 3. Write the combined data to an Excel workbook
+```{r}
+output_xlsx <- file.path(data_dir, "HohPlot171_01merged_results_with_filename.xlsx")
+write_xlsx(all_data, output_xlsx)
+message("Merge complete! Excel file saved to:\n", output_xlsx)
+```

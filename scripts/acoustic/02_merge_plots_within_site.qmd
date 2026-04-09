@@ -1,0 +1,149 @@
+---
+title: "Merge Plots by Study Site"
+subtitle: "An R-driven workflow"
+author: "Jacqueline Wu"
+date: "2025-10-18"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+install.packages(c("readxl","dplyr","stringr","fs","writexl","readr","tidyr", "vroom"))  # Load required libraries, install if needed
+library(vroom)
+library(dplyr)
+library(writexl)
+library(readxl)
+library(stringr)
+library(fs)
+library(readr)
+library(tidyr)
+```
+#### specify the data directory and list all “.xlsx” files
+```{r}
+dir_in <- "E:/merge_all/Hoh_"
+dir_csv <- fs::path(dir_in, "csv")  
+xlsx_files <- list.files(dir_in, pattern = "\\.xlsx$", full.names = TRUE)
+```
+#### convert xlsx to csv due to xlsx size limit
+```{r}
+dir_out <- fs::path(dir_in, "csv")
+fs::dir_create(dir_out)
+xlsx_files <- list.files(dir_in, pattern = "\\.xlsx$", full.names = TRUE)
+xlsx_files <- xlsx_files[!grepl("^(~\\$|\\$)", basename(xlsx_files))]
+if (!length(xlsx_files)) stop("No valid .xlsx files found in: ", dir_in)
+
+converted <- vapply(xlsx_files, function(p) {
+  tryCatch({
+    sheets <- readxl::excel_sheets(p)
+    sheet_to_read <- if ("MERGED_results" %in% sheets) "MERGED_results" else sheets[1]
+
+    df <- readxl::read_excel(p, sheet = sheet_to_read, .name_repair = "unique")
+
+    base <- fs::path_ext_remove(fs::path_file(p))
+    out_path <- fs::path(dir_out, paste0(base, ".csv"))
+
+    readr::write_csv(df, out_path)
+
+    message("Wrote: ", out_path, "  (rows: ", nrow(df), ", cols: ", ncol(df), ")")
+    TRUE
+  }, error = function(e) {
+    warning("Skipping ", basename(p), " -> ", conditionMessage(e))
+    FALSE
+  })
+}, logical(1)
+)
+```
+#### normalize the basename
+```{r}
+parse_from_csv_name <- function(path) {
+  base <- fs::path_file(path)
+  base <- fs::path_ext_remove(base)
+  base <- sub("^(~\\$|\\$)", "", base)
+  base <- sub("^.*\\$", "", base)
+  base <- gsub("\\s+", "_", base)
+
+  triplet <- sub("^([A-Za-z]+)(\\d{2,3})[_-](\\d{3}).*$", "\\1|\\2|\\3", base)
+  
+  parts <- strsplit(triplet, "\\|", fixed = FALSE)[[1]]
+  if (length(parts) != 3 || any(is.na(parts))) {
+    stop("Filename did not match expected pattern after normalization: ", base,
+         "\nExpected like: Hoh92_603_01...csv")
+  }
+
+  tibble::tibble(
+    study_site  = parts[1],
+    plot_number = readr::parse_integer(parts[2]),
+    aru_number  = readr::parse_integer(parts[3])
+  )
+}
+
+```
+#### helper function
+```{r}
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
+add_date_hour <- function(df) {
+  date_raw <- sub("^.*_(20\\d{6})_.*$", "\\1", df$source_file)
+
+  time_raw <- sub("^.*_(\\d{6})\\D.*$", "\\1", df$source_file)
+
+  df |>
+    dplyr::mutate(
+      # character "YYYY-MM-DD"
+      record_date = dplyr::if_else(
+        grepl("^20\\d{6}$", date_raw),
+        format(as.Date(date_raw, "%Y%m%d"), "%Y-%m-%d"),
+        NA_character_
+      ),
+      record_hour = dplyr::if_else(
+        grepl("^\\d{6}$", time_raw),
+        suppressWarnings(readr::parse_integer(substr(time_raw %||% "", 1, 2))),
+        NA_integer_
+      )
+    )
+}
+```
+#### read each CSV, attach metadata from its file name, and derive date/hour
+```{r}
+csv_files <- list.files(dir_csv, pattern = "\\.csv$", full.names = TRUE)
+csv_files <- csv_files[!grepl("^(~\\$|\\$)", basename(csv_files))]
+
+parts <- lapply(csv_files, function(p) {
+  tryCatch({
+    meta <- parse_from_csv_name(p)
+    
+    df <- vroom::vroom(p, show_col_types = FALSE, altrep = TRUE, progress = FALSE)
+    
+    df |>
+      dplyr::mutate(
+        study_site  = meta$study_site,
+        plot_number = meta$plot_number,
+        aru_number  = meta$aru_number,
+        .before = 1
+      ) |>
+      add_date_hour()
+  }, error = function(e) {
+    warning("Skipping ", basename(p), " -> ", conditionMessage(e))
+    NULL
+  })
+})
+```
+#### organize columns and write outputs
+```{r}
+all_merged <- dplyr::bind_rows(parts) |>
+  dplyr::distinct() |>
+  dplyr::relocate(study_site, plot_number, aru_number, record_date, record_hour, .before = 1) |>
+  dplyr::arrange(study_site, plot_number, aru_number, record_date, record_hour, source_file)
+
+message("Merged rows: ", nrow(all_merged), " from files: ", length(parts))
+
+out_dir <- fs::path(dir_csv, "merged_output")
+fs::dir_create(out_dir)
+
+readr::write_csv(all_merged, fs::path(out_dir, "Hoh_ALL_plots.csv"))
+```

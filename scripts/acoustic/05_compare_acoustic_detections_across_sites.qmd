@@ -1,0 +1,120 @@
+---
+title: "Confidence level and comparative analysis"
+subtitle: "An R-driven workflow"
+author: "Jacqueline Wu"
+date: "2025-08-10"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+install.packages(c("readxl", "dplyr","tidyr", "ggplot2", "purrr", "stringr", "vegan"))  # Load required libraries, install if needed
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(readxl)
+library(purrr)
+library(vegan)
+```
+
+#### 1. Read in merged data
+```{r}
+paths <- c(
+  Ellsworth = "D:/HuaweiMoveData/Users/jacqu/Desktop/Ellsworth86_513merged_results_with_filename.xlsx",
+  Hoh = "D:/HuaweiMoveData/Users/jacqu/Desktop/HohPlot171_01merged_results_with_filename.xlsx",
+  Clearwater = "D:/HuaweiMoveData/Users/jacqu/Desktop/Clearwater133_550merged_results_with_filename.xlsx"
+)
+
+df <- imap_dfr(paths, ~ read_excel(.x) %>% mutate(site = .y))
+# Identify all abiotic terms and remove them
+abiotic_terms <- c("Abiotic Rain","Abiotic Wind", "Abiotic Vehicle","Abiotic Aircraft", "Abiotic Logging")
+
+df <- df %>%
+  filter(!`Common name` %in% abiotic_terms)
+```
+#### 2. Adjust confidence level
+```{r}
+det_pct <- df %>%
+  group_by(site) %>%
+  summarise(
+    total_rows = n(),
+    non_na_rows = sum(!is.na(Confidence)),
+    ge_0_15_rows = sum(Confidence >= 0.15, na.rm = TRUE),
+    ge_0_20_rows = sum(Confidence >= 0.20, na.rm = TRUE),
+    ge_0_30_rows = sum(Confidence >= 0.30, na.rm = TRUE),
+    ge_0_40_rows = sum(Confidence >= 0.40, na.rm = TRUE),
+    pct_ge_0_15 = ge_0_15_rows / non_na_rows,
+    pct_ge_0_20 = ge_0_20_rows / non_na_rows,
+    pct_ge_0_30 = ge_0_30_rows / non_na_rows,
+    pct_ge_0_40 = ge_0_40_rows / non_na_rows,
+    .groups = "drop"
+  )
+print(det_pct)
+```
+#### 3. Read in result data
+```{r}
+paths <- c(
+  Ellsworth  = "D:/HuaweiMoveData/Users/jacqu/Desktop/Ellsworth86_513summary_by_species.xlsx",
+  Hoh        = "D:/HuaweiMoveData/Users/jacqu/Desktop/HohPlot171_01summary_by_species.xlsx",
+  Clearwater = "D:/HuaweiMoveData/Users/jacqu/Desktop/Clearwater133_550summary_by_species.xlsx"
+)
+
+df_all <- imap_dfr(paths, ~ read_excel(.x) %>%
+          mutate(site = .y, `Common name` = stringr::str_squish(`Common name`))
+          ) %>%
+          filter(!`Common name` %in% abiotic_terms)
+```
+#### 4.1 Comparative analysis - Identify shared and unique species
+```{r}
+# Check presence or absence
+sp_pa <- df_all %>%
+  distinct(site, `Common name`) %>%
+  mutate(present = 1L) %>%
+  tidyr::pivot_wider(
+    names_from  = site,
+    values_from = present,
+    values_fill = 0
+  )
+# Define sets
+all_three <- sp_pa %>% filter(Ellsworth==1, Hoh==1, Clearwater==1)
+only_ellsworth  <- sp_pa %>% filter(Ellsworth==1, Hoh==0, Clearwater==0)
+only_hoh  <- sp_pa %>% filter(Ellsworth==0, Hoh==1, Clearwater==0)
+only_clearwater <- sp_pa %>% filter(Ellsworth==0, Hoh==0, Clearwater==1)
+
+ell_hoh_only <- sp_pa %>% filter(Ellsworth==1, Hoh==1, Clearwater==0)
+ell_cw_only <- sp_pa %>% filter(Ellsworth==1, Hoh==0, Clearwater==1)
+hoh_cw_only <- sp_pa %>% filter(Ellsworth==0, Hoh==1, Clearwater==1)
+# Summary counts
+set_counts <- tibble(
+  group = c("Shared by all three",
+            "Ellsworth only","Hoh only","Clearwater only",
+            "Ellsworth & Hoh","Ellsworth & Clearwater","Hoh & Clearwater"),
+  n = c(nrow(all_three),
+        nrow(only_ellsworth), nrow(only_hoh), nrow(only_clearwater),
+        nrow(ell_hoh_only), nrow(ell_cw_only), nrow(hoh_cw_only))
+)
+```
+#### 4.2 Comparative analysis - total species, total detections, Shannon
+```{r}
+df_all <- df_all %>% 
+  mutate(total_det = days_detected * avg_detections_per_day)
+
+site_summary <- df_all %>% 
+  group_by(site) %>% 
+  summarise(
+    richness_total = n_distinct(`Common name`),
+    total_detections_est = sum(total_det, na.rm = TRUE),
+    shannon_by_detections = diversity(total_det, "shannon"),
+    shannon_by_days = diversity(days_detected, "shannon")
+  )
+```
+#### 5.1 Visualization
+```{r}
+
+```
