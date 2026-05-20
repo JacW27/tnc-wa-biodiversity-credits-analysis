@@ -9,6 +9,7 @@ library(coda)
 
 #read in data 
 #MIA: you can go to the file read_data.r and enter the rest of the data files there 
+#MIA: you will have to put all the data files in the data folder 
 source(here("Mia_capstone",'read_data.r'))
 
 #put all the processing steps in a function so you can apply them to any input file 
