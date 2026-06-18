@@ -1,35 +1,43 @@
-f1 <- read_excel(here("data/Hoh","Hoh146_686_merged_results_with_filename.xlsx"))
-f2 <- read_excel(here("data/Hoh","Hoh147_625_merged_results_with_filename.xlsx"))
-f3 <- read_excel(here("data/Hoh","Hoh149_333_merged_results_with_filename.xlsx"))
-f4 <- read_excel(here("data/Hoh","Hoh151_610_merged_results_with_filename.xlsx"))
-f5 <- read_excel(here("data/Hoh","Hoh152_991_merged_results_with_filename.xlsx"))
-f6 <- read_excel(here("data/Hoh","Hoh156_691_merged_results_with_filename.xlsx"))
-f7 <- read_excel(here("data/Hoh","Hoh164_662_merged_results_with_filename.xlsx"))
-f8 <- read_excel(here("data/Hoh","Hoh169_541_01merged_results_with_filename.xlsx"))
-f9 <- read_excel(here("data/Hoh","Hoh171_001_merged_results_with_filename.xlsx"))
-f10 <- read_excel(here("data/Hoh","Hoh176_598_merged_results_with_filename.xlsx"))
-f11 <- read_excel(here("data/Hoh","Hoh185_621_merged_results_with_filename.xlsx"))
-f12 <- read_excel(here("data/Hoh","Hoh190_000_merged_results_with_filename.xlsx"))
-f13 <- read_excel(here("data/Hoh","Hoh198_530_merged_results_with_filename.xlsx"))
-f14 <- read_excel(here("data/Hoh","Hoh207_934_merged_results_with_filename.xlsx"))
-f15 <- read_excel(here("data/Hoh","Hoh209_601_merged_results_with_filename.xlsx"))
-f16 <- read_excel(here("data/Hoh","Hoh219_593_merged_results_with_filename.xlsx"))
-f17 <- read_excel(here("data/Hoh","Hoh230_043_merged_results_with_filename.xlsx"))
-f18 <- read_excel(here("data/Hoh","Hoh232_970_01merged_results_with_filename.xlsx"))
-f19 <- read_excel(here("data/Hoh","Hoh234_556_merged_results_with_filename.xlsx"))
-f20 <- read_excel(here("data/Hoh","Hoh238_656_merged_results_with_filename.xlsx"))
-f21 <- read_excel(here("data/Hoh","Hoh244_506_01merged_results_with_filename.xlsx"))
-f22 <- read_excel(here("data/Hoh","Hoh254_545_merged_results_with_filename.xlsx"))
-#or
-files <- list.files(
-  here("Data", "Hoh"),
+# Hoh files -> H1, H2, H3, ...
+Hoh <- list.files(
+    here("Data", "Hoh"),
   pattern = "\\.xlsx$",
   full.names = TRUE
 )
 
-f <- lapply(files, read_excel)
+h <- lapply(Hoh, read_excel)
 
 list2env(
-  setNames(f, paste0("f", seq_along(f))),
+  setNames(h, paste0("H", seq_along(h))),
+  envir = .GlobalEnv
+)
+
+
+# Clearwater files -> C1, C2, C3, ...
+Clearwater <- list.files(
+   here("Data", "Clearwater"),
+  pattern = "\\.xlsx$",
+  full.names = TRUE
+)
+
+c <- lapply(Clearwater, read_excel)
+
+list2env(
+  setNames(c, paste0("C", seq_along(c))),
+  envir = .GlobalEnv
+)
+
+
+# Ellsworth files -> E1, E2, E3, ...
+Ellsworth <- list.files(
+    here("Data", "Ellsworth"),
+  pattern = "\\.xlsx$",
+  full.names = TRUE
+)
+
+e <- lapply(Ellsworth, read_excel)
+
+list2env(
+  setNames(e, paste0("E", seq_along(e))),
   envir = .GlobalEnv
 )
