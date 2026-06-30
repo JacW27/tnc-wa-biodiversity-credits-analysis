@@ -3,121 +3,129 @@ library(readxl)
 library(stringr)
 library(lubridate)
 library(dplyr)
+library(abind)
 library(nimble)
 library(MCMCvis)
 library(coda)
 
 #read in data 
-#I don't have the other data files for Clearwater and Ellsworth - so this is Hoh only
-#source(here("Mia_capstone",'read_data.r'))
+source(here("scripts/OccupancyModel",'read_data.r'))
 
-#put all the processing steps in a function so you can apply them to any input file 
+#put all the processing steps in a function 
 get.simple <- function(input){
-  
-#keep only what you need 
-input <- input %>% select(source_file, `Common name`)
-colnames(input) <- c("source_file","common_name")
+  #keep only what you need 
+  input <- input %>% select(source_file, `Common name`)
+  colnames(input) <- c("source_file","common_name")
+  #get rid of non-birds 
+  input <- input[input$common_name != "Abiotic Aircraft", ]
+  input <- input[input$common_name != "Abiotic Logging", ]
+  input <- input[input$common_name != "Abiotic Rain", ]
+  input <- input[input$common_name != "Abiotic Vehicle", ]
+  input <- input[input$common_name != "Abiotic Wind", ]
+  input <- input[input$common_name != "Biotic Anuran", ]
+  input <- input[input$common_name != "Biotic Insect", ]
+  #make dates in the file 
+  input$date <- make_date(year = substr(input$source_file,10,13),
+                          month = substr(input$source_file,14,15), 
+                          day =  substr(input$source_file,16,17))
+  #collapse to a record for species by day, with a count of the observations 
+  daily <- input %>% group_by(common_name,date) %>% tally() 
 
-###MAKE SURE TO CHECK FOR MORE NON-BIRDS IN OTHER FILES! 
-#get rid of non-birds 
-input <- input[input$common_name != "Abiotic Aircraft", ]
-input <- input[input$common_name != "Abiotic Logging", ]
-input <- input[input$common_name != "Abiotic Rain", ]
-input <- input[input$common_name != "Abiotic Vehicle", ]
-input <- input[input$common_name != "Abiotic Wind", ]
-input <- input[input$common_name != "Biotic Anuran", ]
-input <- input[input$common_name != "Biotic Insect", ]
-
-#make dates in the file 
-input$date <- make_date(year = substr(input$source_file,10,13),
-                        month = substr(input$source_file,14,15), 
-                        day =  substr(input$source_file,16,17))
-
-#collapse to a record for species by day, with a count of the observations 
-daily <- input %>% group_by(common_name,date) %>% tally() 
-
-return(daily)
+  return(daily)
 } 
 
-#need to get these for Ellsworth and Clearwater 
-H1.s <- as.data.frame(get.simple(H1))  #5-8 to 6-23 plus 7-1 
-H2.s <- as.data.frame(get.simple(H2))  #5-8 to 6-23
-H3.s <- as.data.frame(get.simple(H3))  #5-8 to 6-14
-H4.s <- as.data.frame(get.simple(H4))  #5-8 to 6-13 with days missing 05/18,05/21,05/24,05/26,06/03,06/06,06/09,06/12
-H5.s <- as.data.frame(get.simple(H5))  #5-8 to 6-23 with days missing incl stretch 5-20 to 6-1 and 06/14,06/16,06/18,06/20,06/22
-H6.s <- as.data.frame(get.simple(H6))  #5-8 to 6-24
-H7.s <- as.data.frame(get.simple(H7))  #5-8 to 6-25
-H8.s <- as.data.frame(get.simple(H8))  #5-8 to 6-23
-H9.s <- as.data.frame(get.simple(H9))  #5-8 to 6-16
-H10.s <- as.data.frame(get.simple(H10))  #5-8 to 6-15
-H11.s <- as.data.frame(get.simple(H11))  #5-8 to 6-22
-H12.s <- as.data.frame(get.simple(H12))  #5-8 to 6-22
-H13.s <- as.data.frame(get.simple(H13))  #5-13 to 6-23 with missing days 05/14,05/16,05/18
-H14.s <- as.data.frame(get.simple(H14))  #5-8 to 6-24
-H15.s <- as.data.frame(get.simple(H15))  #5-8 to 6-12 
-H16.s <- as.data.frame(get.simple(H16))  #5-8 to 6-24 
-H17.s <- as.data.frame(get.simple(H17))  #5-8 to 6-24 
-H18.s <- as.data.frame(get.simple(H18))  #5-8 to 6-20
-H19.s <- as.data.frame(get.simple(H19))  #5-8 to 6-14
-H20.s <- as.data.frame(get.simple(H20))  #5-8 to 6-12 
-H21.s <- as.data.frame(get.simple(H21))  #5-8 to 6-11
-H22.s <- as.data.frame(get.simple(H22))  #5-8 to 6-08
-
-#we can also automate above (for Hoh) 
+#process files 
 for(i in 1:22){
   file <- get(paste0("H",i))
   name <-  paste0("H",i,".s")
   assign(name,as.data.frame(get.simple(file)))
 }
-
+for(i in 1:15){
+  file <- get(paste0("C",i))
+  name <-  paste0("C",i,".s")
+  assign(name,as.data.frame(get.simple(file)))
+}
+for(i in 1:24){
+  file <- get(paste0("E",i))
+  name <-  paste0("E",i,".s")
+  assign(name,as.data.frame(get.simple(file)))
+}
 
 #get a comprehensive list of dates
-#may need to change this if the other sites have more dates we want to use 
-dates <- sort(unique(H7.s$date))
+get.dates <- function(code,file.count){
+  all.dates <- get(paste0(code,1,".s"))$date
+  for(i in 2:file.count){
+    names <- get(paste0(code,i,".s"))$date
+    all.dates <- c(all.dates,names)
+  }
+  return(all.dates)
+}
+dates.H <- get.dates("H",22)
+dates.E <- get.dates("E",24)
+dates.C <- get.dates("C",15)
+dates <- sort(unique(c(dates.H,dates.E,dates.C)))
+
+#remove first date as it is anomalous 
+#table(c(dates.H,dates.E,dates.C))
+dates <- dates[-1]
 
 #get a comprehensive list of species 
-#may need to expand this when we add other sites  
-all <- c(H1.s$common_name)
-for(i in 2:22){
-  new <- paste0("H",i,".s")
-  result <- get(new)
-  names <- result$common_name
-  all <- c(all,names)
+get.spp <- function(code,file.count){
+  all.spp <- get(paste0(code,1,".s"))$common_name
+  for(i in 2:file.count){
+    names <- get(paste0(code,i,".s"))$common_name
+    all.spp <- c(all.spp,names)
+  }
+  return(all.spp)
 }
-species <- sort(unique(all))
+spp.H <- get.spp("H",22)
+spp.E <- get.spp("E",24)
+spp.C <- get.spp("C",15)
+species <- sort(unique(c(spp.H,spp.E,spp.C)))
 
-#create an array of species by date by point  
-all.array <- array(NA,dim = c(length(species),length(dates),22))
-for(i in 1:22){
-  site <- get(paste0("H",i,".s"))
-  for(s in 1:length(species)){
-    for(t in 1:length(dates)){
-      spp <- which(site$common_name == species[s]) 
-      dt <- which(site$date == dates[t])
-      inter <- intersect(spp,dt)
-      if(length(inter > 0)){
-        all.array[s,t,i] <- site$n[inter]
+#create an array of species by date by point 
+array <- function(code,file.count,species,dates){
+  all.array <- base::array(NA,dim = c(length(species),length(dates),file.count))
+  for(i in 1:file.count){
+    site <- get(paste0(code,i,".s"))
+    for(s in 1:length(species)){
+      for(t in 1:length(dates)){
+        spp <- which(site$common_name == species[s]) 
+        dt <- which(site$date == dates[t])
+        inter <- intersect(spp,dt)
+        if(length(inter > 0)){
+          all.array[s,t,i] <- site$n[inter]
+        }
       }
     }
   }
+  return(all.array)
 }
+H.array <- array("H",22,species,dates)
+E.array <- array("E",24,species,dates)
+C.array <- array("C",15,species,dates)
+array.temp <- abind(H.array,E.array,along=3)
+all.array <- abind(array.temp,C.array,along=3)
+
 #now we can make this array 0 (if NA) or 1 (if otherwise)
 all.obs <- all.array
 all.obs[is.na(all.array==TRUE)] <- 0
 all.obs[which(all.array>0)] <- 1
 
-
 #Look at how often different species are seen
-#this gives us a count of the days * sites where a given species was seen
-#apply(all.obs,c(1),sum)
-#for WCSP = 1
-#for RCKI = 12 
-#for OSFL = 27 
-#all other species > 50 
-
+#these are the species seen on less than 10 point-days 
+species[which(apply(all.obs,c(1),sum)<10)]
 
 #we also need to create an effort matrix, which is dimensions dates by sites
 #I am assuming here that if there are no detections of any species in a day, there was no effort on that day  
+
+##TO DO ITEMS##
+#we need to figure out why some dates aren't showing up in the data files and add those 
+#and then we want to create an effort matrix that is the number of hours in the day with a successful recording 
+#this could be from 0 to 24 
+#so for each day and point, count the number of recording files that exist and put this in a day * point matrix 
+
+#effort matrix
 effort <- matrix(0,nrow = length(dates),ncol = 22)
 for(i in 1:22){
   site <- get(paste0("H",i,".s"))
